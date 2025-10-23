@@ -5,7 +5,7 @@ const QLearning = require('./qlearning');
 
 // --- Configurações do Bot ---
 const botConfig = {
-    host: '172.19.195.170',
+    host: '192.168.0.109',
     port: 59437,
     username: 'IAConfianca',
     version: '1.20.1'
@@ -262,4 +262,3 @@ function printCharts(history, rewards, currentRound, epsilon) {
     console.log(`│ Pior Recompensa      : ${minRewardObtained.toString().padStart(6)}                               │`);
     console.log('└────────────────────────────────────────────────────────────────────┘\n');
 }
-

@@ -19,10 +19,12 @@ class StateManager {
     getReward(acaoIA) {
         const acaoJ1 = this.estadoJogador1 || 'C';
 
+        // Matriz de recompensas do jogo real (baseada no sistema de pontuação do servidor)
+        // Formato: IA joga X, Jogador joga Y → Recompensa da IA
         const recompensas = {
-            'C': { 'C': 1, 'T': 0, 'D': 2 },
-            'T': { 'C': 3, 'T': 0, 'D': 0 },
-            'D': { 'C': 3, 'T': 3, 'D': 0 }
+            'C': { 'C': 1, 'T': 0, 'D': 2 },  // Cooperar: mútuo(1), traído(0), contra D(2)
+            'T': { 'C': 3, 'T': 0, 'D': 0 },  // Trair: vs cooperador(3), mútuo(0), bloqueado(0)
+            'D': { 'C': 0, 'T': 3, 'D': 0 }   // Desconfiar: desperdiçado(0), defesa(3), mútuo(0)
         };
 
         return recompensas[acaoIA]?.[acaoJ1] ?? 0;
