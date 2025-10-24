@@ -2,6 +2,9 @@
 const mineflayer = require('mineflayer');
 const StateManager = require('./statemanager');
 const QLearning = require('./qlearning');
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
 // --- Configurações do Bot ---
 const botConfig = {
@@ -31,7 +34,13 @@ const bot = mineflayer.createBot(botConfig);
 bot.on('error', err => console.error('[ERRO] Falha ao conectar:', err));
 bot.on('end', reason => console.log(`[BOT] Conexão encerrada. Motivo: ${reason}`));
 bot.on('kicked', reason => console.log(`[BOT] Kicked: ${reason}`));
-bot.once('spawn', () => console.log('[BOT] Entrou no mundo Minecraft. IA pronta!'));
+bot.once('spawn', () => {
+    console.log('[BOT] Entrou no mundo Minecraft. IA pronta!');
+    setTimeout(() => {
+        bot.chat('/tp IAConfianca 9 -47 -27');
+        console.log('[BOT] Teleportado para posição inicial (9, -47, -27)');
+    }, 1000);
+});
 
 // --- Evento Único para todas as mensagens ---
 bot.on('message', async (msg) => {
@@ -142,11 +151,88 @@ async function getScoreboardValue(playerName, objective) {
     });
 }
 
-// --- Funções de Geração de Gráficos (Estilo Matplotlib) ---
+// --- Função Principal: Gerar Gráficos com Matplotlib ---
 function printCharts(history, rewards, currentRound, epsilon) {
+    // Tentar gerar gráficos com matplotlib
+    generateMatplotlibGraphs(history, rewards, currentRound, epsilon);
+}
+
+// --- Geração de Gráficos com Python/Matplotlib ---
+function generateMatplotlibGraphs(history, rewards, currentRound, epsilon) {
+    const data = {
+        history: history,
+        rewards: rewards,
+        round: currentRound,
+        epsilon: epsilon
+    };
+
+    const jsonData = JSON.stringify(data);
+    const pythonScript = path.join(__dirname, 'plot_charts.py');
+
+    console.log('\n[📊 MATPLOTLIB] Gerando gráficos...');
+
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+
+    const pythonProcess = spawn(pythonCmd, [pythonScript], {
+        stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    pythonProcess.stdin.write(jsonData);
+    pythonProcess.stdin.end();
+
+    let outputData = '';
+    let errorData = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+        outputData += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+        errorData += data.toString();
+    });
+
+    pythonProcess.on('close', (code) => {
+        if (code === 0) {
+            try {
+                const lines = outputData.trim().split('\n');
+                const lastLine = lines[lines.length - 1];
+
+                let result;
+                try {
+                    result = JSON.parse(lastLine);
+                } catch (e) {
+                    console.log(outputData);
+                    return;
+                }
+
+                if (result.success) {
+                    console.log(`[✓ MATPLOTLIB] Gráficos salvos: ${path.basename(result.filepath)}`);
+                    console.log(`[✓ MATPLOTLIB] Acesse: charts/latest.png\n`);
+                } else {
+                    console.log(`[✗ MATPLOTLIB] Erro: ${result.message}`);
+                }
+            } catch (e) {
+                console.log(outputData);
+            }
+        } else {
+            console.log(`[✗ MATPLOTLIB] Python não disponível`);
+            console.log(`[INFO] Instale: pip install matplotlib\n`);
+            // Fallback para gráfico ASCII
+            printChartsASCII(history, rewards, currentRound, epsilon);
+        }
+    });
+
+    pythonProcess.on('error', (err) => {
+        console.log('[✗ MATPLOTLIB] Python não encontrado');
+        console.log('[INFO] Instale Python 3 e execute: pip install matplotlib\n');
+        // Fallback para gráfico ASCII
+        printChartsASCII(history, rewards, currentRound, epsilon);
+    });
+}
+
+// --- Fallback: Gráficos ASCII (se Python não disponível) ---
+function printChartsASCII(history, rewards, currentRound, epsilon) {
     const BAR_WIDTH = 40;
-    const CHART_HEIGHT = 15;
-    const CHART_WIDTH = 50;
     const actionsMap = { 'C': 'Cooperar', 'T': 'Trair', 'D': 'Desconfiar' };
     const actionsColor = { 'C': '█', 'T': '▓', 'D': '▒' };
 
@@ -174,91 +260,20 @@ function printCharts(history, rewards, currentRound, epsilon) {
     });
     console.log('└────────────────────────────────────────────────────────────────────┘');
 
-    // --- [2] CURVA DE APRENDIZADO (Estilo Matplotlib) ---
-    console.log('\n┌─ Curva de Aprendizado (Recompensa Média Móvel) ────────────────────┐');
-
-    if (rewards.length === 0) {
-        console.log('│  Dados insuficientes                                               │');
-        console.log('└────────────────────────────────────────────────────────────────────┘');
-        return;
-    }
-
-    // Calcula Média Móvel
-    const windowSize = Math.min(10, rewards.length);
-    let movingAvg = [];
-    for (let i = 0; i < rewards.length; i++) {
-        const start = Math.max(0, i - windowSize + 1);
-        const window = rewards.slice(start, i + 1);
-        const sum = window.reduce((a, b) => a + b, 0);
-        movingAvg.push(sum / window.length);
-    }
-
-    // Normalização para o gráfico
-    const maxReward = 3.0;
-    const minReward = 0.0;
-
-    // Amostragem dos dados se houver muitos pontos
-    const dataPoints = movingAvg.length > CHART_WIDTH
-        ? movingAvg.filter((_, i) => i % Math.ceil(movingAvg.length / CHART_WIDTH) === 0)
-        : movingAvg;
-
-    // Desenha gráfico estilo matplotlib
-    console.log(`│ ${maxReward.toFixed(1)} ┤`);
-
-    for (let y = CHART_HEIGHT; y >= 0; y--) {
-        const targetValue = minReward + (y / CHART_HEIGHT) * (maxReward - minReward);
-        let line = '│';
-
-        if (y === CHART_HEIGHT) line += ' ┌';
-        else if (y === 0) line += ' └';
-        else line += '  ';
-
-        for (let x = 0; x < dataPoints.length; x++) {
-            const value = dataPoints[x];
-            const nextValue = x < dataPoints.length - 1 ? dataPoints[x + 1] : value;
-
-            const threshold = (maxReward - minReward) / (CHART_HEIGHT * 2);
-
-            // Desenha a linha
-            if (Math.abs(value - targetValue) < threshold) {
-                if (x === dataPoints.length - 1) {
-                    line += '●'; // Ponto atual
-                } else if (nextValue > value) {
-                    line += '╱'; // Subindo
-                } else if (nextValue < value) {
-                    line += '╲'; // Descendo
-                } else {
-                    line += '─'; // Estável
-                }
-            } else if (value > targetValue && (value - threshold) < targetValue) {
-                line += '▀'; // Acima
-            } else if (value < targetValue && (value + threshold) > targetValue) {
-                line += '▄'; // Abaixo
-            } else {
-                line += ' ';
-            }
+    // Estatísticas simples
+    if (rewards.length > 0) {
+        console.log('\n┌─ Estatísticas ─────────────────────────────────────────────────────┐');
+        const windowSize = Math.min(10, rewards.length);
+        let sum = 0;
+        for (let i = Math.max(0, rewards.length - windowSize); i < rewards.length; i++) {
+            sum += rewards[i];
         }
+        const currentAvg = sum / Math.min(windowSize, rewards.length);
+        const totalReward = rewards.reduce((s, r) => s + r, 0);
+        const overallAvg = totalReward / rewards.length;
 
-        const label = y === CHART_HEIGHT || y === 0 ? '' : ' ';
-        console.log(line);
+        console.log(`│ Rodadas: ${currentRound} | Epsilon: ${(epsilon * 100).toFixed(1)}% | Média: ${currentAvg.toFixed(2)} │`);
+        console.log('└────────────────────────────────────────────────────────────────────┘');
     }
-
-    console.log(`│ ${minReward.toFixed(1)} └${'─'.repeat(dataPoints.length)}`);
-    console.log('└────────────────────────────────────────────────────────────────────┘');
-
-    // --- [3] ESTATÍSTICAS ---
-    console.log('\n┌─ Estatísticas de Aprendizado ──────────────────────────────────────┐');
-    const currentAvg = movingAvg[movingAvg.length - 1];
-    const totalReward = rewards.reduce((sum, r) => sum + r, 0);
-    const overallAvg = totalReward / rewards.length;
-    const maxRewardObtained = Math.max(...rewards);
-    const minRewardObtained = Math.min(...rewards);
-
-    console.log(`│ Rodadas Jogadas      : ${currentRound.toString().padStart(6)}                               │`);
-    console.log(`│ Taxa de Exploração   : ${(epsilon * 100).toFixed(1)}%                                   │`);
-    console.log(`│ Média Móvel Atual    : ${currentAvg.toFixed(3).padStart(6)}                               │`);
-    console.log(`│ Média Geral          : ${overallAvg.toFixed(3).padStart(6)}                               │`);
-    console.log(`│ Melhor Recompensa    : ${maxRewardObtained.toString().padStart(6)}                               │`);
-    console.log(`│ Pior Recompensa      : ${minRewardObtained.toString().padStart(6)}                               │`);
-    console.log('└────────────────────────────────────────────────────────────────────┘\n');
+    console.log('[INFO] Gráficos ASCII (modo fallback)\n');
 }

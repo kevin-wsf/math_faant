@@ -8,7 +8,7 @@ IA: C, Jogador: C -> IA +1, Jogador +1
 IA: C, Jogador: T -> IA +0, Jogador +3
 IA: C, Jogador: D -> IA +2, Jogador +0
 IA: T, Jogador: C -> IA +3, Jogador +0
-IA: T, Jogador: T -> IA +0, Jogador +0 (ou +1/+1?)
+IA: T, Jogador: T -> IA +0, Jogador +0
 IA: T, Jogador: D -> IA +0, Jogador +3
 IA: D, Jogador: C -> IA +0, Jogador +2
 IA: D, Jogador: T -> IA +3, Jogador +0
