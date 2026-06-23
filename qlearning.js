@@ -1,15 +1,15 @@
 // qlearning.js
 class QLearning {
-    constructor(actions, alpha = 0.15, gamma = 0.85, epsilon = 0.2, initialQ = 0.0, epsilonMin = 0.05, epsilonDecay = 0.995) {
+    constructor(actions, alpha = 0.35, gamma = 0.85, epsilon = 0.3, initialQ = 0.0, epsilonMin = 0.05, epsilonDecay = 0.97) {
         this.actions = actions;
-        this.alpha = alpha;
-        this.gamma = gamma;
-        this.epsilon = epsilon;
-        this.epsilonInit = epsilon;
-        this.epsilonMin = epsilonMin;
-        this.epsilonDecay = epsilonDecay;
-        this.initialQ = initialQ;
-        this.qTable = {};
+        this.alpha = alpha; // taxa de aprendizado
+        this.gamma = gamma; // fator de desconto
+        this.epsilon = epsilon; // taxa de exploração inicial
+        this.epsilonInit = epsilon; // taxa de exploração inicial
+        this.epsilonMin = epsilonMin; // taxa de exploração mínima
+        this.epsilonDecay = epsilonDecay; // decaimento da taxa de exploração
+        this.initialQ = initialQ; // recompensa inicial (evitar escolha imparcial inicialmente)
+        this.qTable = {}; // tabela Q
     }
 
     getQValue(state, action) {
@@ -32,7 +32,9 @@ class QLearning {
     updateQTable(state, action, reward, nextState) {
         const oldQ = this.getQValue(state, action);
         const nextMax = Math.max(...this.actions.map(a => this.getQValue(nextState, a)));
-        const newQ = oldQ + this.alpha * (reward + this.gamma * nextMax - oldQ);
+
+        const newQ = oldQ + this.alpha * (reward + this.gamma * nextMax - oldQ);  // Função de atualização Q-learning
+        
         this.qTable[state][action] = newQ;
         console.log(`[IA] Q(${state}, ${action}) = ${newQ.toFixed(3)} (ε=${this.epsilon.toFixed(3)})`);
     }
@@ -43,6 +45,34 @@ class QLearning {
 
     getExplorationRate() {
         return this.epsilon;
+    }
+
+    saveQTable(filePath) {
+        const data = {
+            qTable: this.qTable,
+            epsilon: this.epsilon
+        };
+        require('fs').writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    }
+
+    loadQTable(filePath) {
+        const fs = require('fs');
+        if (!fs.existsSync(filePath)) return false;
+
+        try {
+            const raw = fs.readFileSync(filePath, 'utf-8');
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                this.qTable = parsed.qTable || {};
+                if (typeof parsed.epsilon === 'number') {
+                    this.epsilon = parsed.epsilon;
+                }
+                return true;
+            }
+        } catch (err) {
+            console.warn('[IA] Falha ao carregar Q-table:', err.message);
+        }
+        return false;
     }
 }
 

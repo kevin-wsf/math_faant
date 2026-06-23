@@ -8,16 +8,21 @@ const fs = require('fs');
 
 // --- Configurações do Bot ---
 const botConfig = {
-    host: '192.168.0.109',
+    host: '192.168.0.39',
     port: 59437,
     username: 'IAConfianca',
     version: '1.20.1'
 };
 
-// --- Configurações da IA ---
-const actions = ['C', 'T', 'D']; // Cooperar, Trair, Desconfiar
-let ql = new QLearning(actions, 0.15, 0.85, 0.2, 0.0, 0.05, 0.995);
+// --- Configurações da IA --- 
+const actions = ['C', 'T']; // Cooperar, Trair
+const QTABLE_FILE = path.join(__dirname, 'qtable.json');
+const SAVE_INTERVAL = 5;
+const TERMINAL_STATE = 'TERMINAL';
+let ql = new QLearning(actions, 0.35, 0.85, 0.3, 0.0, 0.05, 0.97);
 const stateManager = new StateManager();
+
+loadQTable();
 
 // Estado e Curva de Aprendizado
 let botLastAction = null;
@@ -45,11 +50,12 @@ bot.once('spawn', () => {
 // --- Evento Único para todas as mensagens ---
 bot.on('message', async (msg) => {
     const message = msg.toString();
+    console.log(`[DEBUG] Mensagem recebida: "${message}"`);
 
     // Reiniciar aprendizado
     if (message.includes('Sistema reiniciado!')) {
         console.log('[IA] Reiniciando o aprendizado...');
-        ql = new QLearning(actions, 0.15, 0.85, 0.2, 0.0, 0.05, 0.995);
+        ql = new QLearning(actions, 0.35, 0.85, 0.3, 0.0, 0.05, 0.97);
         botLastAction = null;
         botLastState = null;
         pending = null;
@@ -58,6 +64,10 @@ bot.on('message', async (msg) => {
         stateManager.myHistory = [];
         learningCurve = [];
         roundCount = 0;
+        if (fs.existsSync(QTABLE_FILE)) {
+            fs.unlinkSync(QTABLE_FILE);
+            console.log('[IA] Q-table persistente removida. Reinício completo.');
+        }
         console.log('[IA] Aprendizado reiniciado com sucesso.');
         return;
     }
@@ -86,11 +96,11 @@ bot.on('message', async (msg) => {
                 pendingReward = null;
             }
 
-            // 2. Escolhe Ação baseado no estado atual
+            // 2. Escolhe a ação usando Q-Learning
             botLastState = currentState;
-            botLastAction = ql.chooseAction(botLastState);
+            botLastAction = ql.chooseAction(currentState);
 
-            // 3. Armazena transição pendente
+            // 3. Armazena transição pendente para próxima atualização
             pending = { state: botLastState, action: botLastAction };
             stateManager.atualizarMinhaAcao(botLastAction);
 
@@ -104,13 +114,31 @@ bot.on('message', async (msg) => {
     if (message.includes('A pontuação foi atualizada!')) {
         console.log('[IA] Rodada finalizada. Calculando recompensa...');
 
+        // Pequeno delay para garantir que o scoreboard foi atualizado
+        await new Promise(resolve => setTimeout(resolve, 500));
+
         if (botLastAction && botLastState) {
             roundCount++;
+
+            // Usa a matriz de recompensas definida (Dilema do Prisioneiro)
+            // Isso garante recompensas consistentes com a regra de aprendizado
             const reward = stateManager.getReward(botLastAction);
+            
+            // Log detalhado do resultado
+            const opponentLastAction = stateManager.opponentHistory.length > 0 
+                ? stateManager.opponentHistory[stateManager.opponentHistory.length - 1]
+                : 'desconhecido';
+            const outcome = `(IA: ${botLastAction} vs Oponente: ${opponentLastAction})`;
+            const rewardType = reward > 0 ? '✅ BOM' : (reward < 0 ? '❌ RUIM' : '⚪ NEUTRO');
+            console.log(`[IA] Recompensa: ${reward} ${rewardType} ${outcome}`);
+
             learningCurve.push(reward);
             pendingReward = reward;
 
-            console.log(`[IA] Recompensa recebida: ${reward}`);
+            // Salva a Q-table periodicamente para manter aprendizado entre sessões
+            if (roundCount % SAVE_INTERVAL === 0) {
+                saveQTable();
+            }
 
             // Geração de gráficos
             printCharts(stateManager.opponentHistory, learningCurve, roundCount, ql.getExplorationRate());
@@ -118,7 +146,38 @@ bot.on('message', async (msg) => {
     }
 });
 
-// --- Funções auxiliares (Mantenha inalteradas) ---
+// --- Funções de persistência ---
+function loadQTable() {
+    if (ql.loadQTable(QTABLE_FILE)) {
+        console.log('[IA] Q-table carregada de', QTABLE_FILE);
+    } else {
+        console.log('[IA] Nenhuma Q-table antiga encontrada, iniciando novo aprendizado.');
+    }
+}
+
+function saveQTable() {
+    try {
+        ql.saveQTable(QTABLE_FILE);
+        console.log('[IA] Q-table salva em', QTABLE_FILE);
+    } catch (err) {
+        console.error('[IA] Falha ao salvar Q-table:', err.message);
+    }
+}
+
+function setupExitHandlers() {
+    process.on('exit', () => saveQTable());
+    process.on('SIGINT', () => {
+        saveQTable();
+        process.exit();
+    });
+    process.on('SIGTERM', () => {
+        saveQTable();
+        process.exit();
+    });
+}
+
+setupExitHandlers();
+
 async function findPlayerWithAction(objective) {
     const players = Object.keys(bot.players);
     for (const playerName of players) {
@@ -153,17 +212,33 @@ async function getScoreboardValue(playerName, objective) {
 
 // --- Função Principal: Gerar Gráficos com Matplotlib ---
 function printCharts(history, rewards, currentRound, epsilon) {
-    // Tentar gerar gráficos com matplotlib
+    console.log(`[📊] Gerando gráficos com ${history.length} ações e ${rewards.length} recompensas...`);
     generateMatplotlibGraphs(history, rewards, currentRound, epsilon);
 }
 
 // --- Geração de Gráficos com Python/Matplotlib ---
 function generateMatplotlibGraphs(history, rewards, currentRound, epsilon) {
+    const accuracy = stateManager.calculateAccuracy(ql.qTable);
+    const trend = stateManager.calculateTrend(rewards);
+    const opponentPrediction = stateManager.predictNextOpponentAction();
+
+    console.log(`[IA] Acurácia Real - Taxa de Acerto: ${(accuracy * 100).toFixed(1)}% | Tendência: ${trend}`);
+    console.log(`[DEBUG] Histórico IA: [${stateManager.myHistory.slice(-5).join(',')}] | Oponente: [${stateManager.opponentHistory.slice(-5).join(',')}]`);
+
+    // Debug Q-table a cada 10 rodadas
+    if (currentRound % 10 === 0) {
+        stateManager.debugQTable(ql.qTable);
+    }
+
     const data = {
         history: history,
         rewards: rewards,
         round: currentRound,
-        epsilon: epsilon
+        epsilon: epsilon,
+        accuracy: accuracy,
+        trend: trend,
+        opponentPrediction: opponentPrediction,
+        myHistory: stateManager.myHistory
     };
 
     const jsonData = JSON.stringify(data);
@@ -233,8 +308,8 @@ function generateMatplotlibGraphs(history, rewards, currentRound, epsilon) {
 // --- Fallback: Gráficos ASCII (se Python não disponível) ---
 function printChartsASCII(history, rewards, currentRound, epsilon) {
     const BAR_WIDTH = 40;
-    const actionsMap = { 'C': 'Cooperar', 'T': 'Trair', 'D': 'Desconfiar' };
-    const actionsColor = { 'C': '█', 'T': '▓', 'D': '▒' };
+    const actionsMap = { 'C': 'Cooperar', 'T': 'Trair' };
+    const actionsColor = { 'C': '█', 'T': '▓' };
 
     console.log('\n╔════════════════════════════════════════════════════════════════════╗');
     console.log(`║           ANÁLISE DE DESEMPENHO - RODADA ${currentRound.toString().padStart(3, '0')}                  ║`);
@@ -251,12 +326,32 @@ function printChartsASCII(history, rewards, currentRound, epsilon) {
     const total = history.length;
     const maxCount = Math.max(...Object.values(counts), 1);
 
-    ['C', 'T', 'D'].forEach(action => {
+    ['C', 'T'].forEach(action => {
         const count = counts[action] || 0;
         const percent = total > 0 ? (count / total * 100) : 0;
         const barLength = Math.round((count / maxCount) * BAR_WIDTH);
         const bar = actionsColor[action].repeat(barLength).padEnd(BAR_WIDTH, '░');
         console.log(`│ ${actionsMap[action].padEnd(12)} │${bar}│ ${percent.toFixed(1)}%`);
+    });
+    console.log('└────────────────────────────────────────────────────────────────────┘');
+
+    // --- [2] ACURÁCIA DA IA (Taxa de Acerto Real) ---
+    const accuracy = stateManager.calculateAccuracy(ql.qTable);
+    const trend = stateManager.calculateTrend(rewards);
+    console.log('\n┌─ Acurácia Real da IA (Taxa de Acerto) ──────────────────────────────┐');
+    const accBar = '█'.repeat(Math.round(accuracy * BAR_WIDTH)).padEnd(BAR_WIDTH, '░');
+    console.log(`│ Taxa de Acerto: ${accBar}│ ${(accuracy * 100).toFixed(1)}%`);
+    console.log(`│ Tendência: ${trend.padEnd(BAR_WIDTH - 12)}`);
+    console.log('└────────────────────────────────────────────────────────────────────┘');
+
+    // --- [3] PREVISÃO PRÓXIMA AÇÃO OPONENTE ---
+    const prediction = stateManager.predictNextOpponentAction();
+    console.log('\n┌─ Previsão: Próxima Ação do Oponente ────────────────────────────────┐');
+    ['C', 'T'].forEach(action => {
+        const prob = prediction[action] || 0;
+        const barLength = Math.round(prob * BAR_WIDTH);
+        const bar = actionsColor[action].repeat(barLength).padEnd(BAR_WIDTH, '░');
+        console.log(`│ ${actionsMap[action].padEnd(12)} │${bar}│ ${(prob * 100).toFixed(1)}%`);
     });
     console.log('└────────────────────────────────────────────────────────────────────┘');
 
@@ -272,8 +367,23 @@ function printChartsASCII(history, rewards, currentRound, epsilon) {
         const totalReward = rewards.reduce((s, r) => s + r, 0);
         const overallAvg = totalReward / rewards.length;
 
-        console.log(`│ Rodadas: ${currentRound} | Epsilon: ${(epsilon * 100).toFixed(1)}% | Média: ${currentAvg.toFixed(2)} │`);
+        console.log(`│ Rodadas: ${currentRound} | Epsilon: ${(epsilon * 100).toFixed(1)}% | Acurácia: ${(accuracy * 100).toFixed(1)}% │`);
+        console.log(`│ Recompensa Total: ${totalReward.toFixed(2)} | Média: ${overallAvg.toFixed(2)} | Recente: ${currentAvg.toFixed(2)} │`);
         console.log('└────────────────────────────────────────────────────────────────────┘');
     }
+
+    // Histórico recente
+    if (history.length > 0 && stateManager.myHistory.length > 0) {
+        console.log('\n┌─ Histórico Recente (últimas 10 rodadas) ───────────────────────────┐');
+        const recentOpp = history.slice(-10);
+        const recentMy = stateManager.myHistory.slice(-10);
+        const minLen = Math.min(recentOpp.length, recentMy.length);
+
+        for (let i = 0; i < minLen; i++) {
+            console.log(`│ Rodada ${String(currentRound - minLen + i + 1).padStart(3, '0')}: IA=${recentMy[i]} | Oponente=${recentOpp[i]} │`);
+        }
+        console.log('└────────────────────────────────────────────────────────────────────┘');
+    }
+
     console.log('[INFO] Gráficos ASCII (modo fallback)\n');
 }
